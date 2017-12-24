@@ -7,20 +7,145 @@
 using namespace std;
 using namespace chrono;
 
+vector<float> centroid_x;
+vector<float> centroid_y;
+
 void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32_t clusterMaxSize, bool saveCSV, bool debugMode);
-void getAttitude();
+void getAttitude(int32_t pairMaxNumber, bool saveCSV, bool debugMode);
 
 int main(void)
 {
-	//findStar("11 c 1.8 100.bmp", 5, 14, 250, false, true);
-	findStar("test2.bmp", 1, 5, 40000, true, true);
-	getAttitude();
+	//findStar("11 vf 1.8 100.bmp", 4, 14, 250, false, true);
+	findStar("11 c 1.8 100.bmp", 5, 14, 250, false, true);
+	//findStar("test2.bmp", 1, 5, 40000, true, true);
+
+	getAttitude(15, false, false);
 	return 0;
 }
 
-void getAttitude()
+void getAttitude(int32_t pairMaxNumber, bool saveCSV, bool debugMode)
 {
-	// 5. 
+	// 5. selection
+	cout << "5. selection" << endl;
+	steady_clock::time_point begin = steady_clock::now();
+	vector<int32_t> pairEuclidean;
+	vector<int32_t> pairIndex1;
+	vector<int32_t> pairIndex2;
+	int32_t numberofCluster = centroid_x.size();
+	int32_t index = 0;
+	for (int32_t i = 0; i < numberofCluster - 1; i++)
+	{
+		for (int32_t j = i + 1; j < numberofCluster; j++)
+		{
+			float deltaX = centroid_x[i] - centroid_x[j];
+			float deltaY = centroid_y[i] - centroid_y[j];
+			pairEuclidean.push_back(sqrtf(deltaX*deltaX + deltaY*deltaY));
+			pairIndex1.push_back(i);
+			pairIndex2.push_back(j);
+		}
+	}
+	// sort in ascending order (bubble sort)
+	int32_t numberofPair = pairEuclidean.size();
+	for (int32_t i = 0; i < pairMaxNumber && i < numberofPair; i++)
+	{
+		for (int32_t j = numberofPair - 1; j > i; j--)
+		{
+			if (pairEuclidean[j] < pairEuclidean[j - 1])
+			{
+				int32_t swapEuclidean = pairEuclidean[j - 1];
+				int32_t swapIndex1 = pairIndex1[j - 1];
+				int32_t swapIndex2 = pairIndex2[j - 1];
+				pairEuclidean[j - 1] = pairEuclidean[j];
+				pairIndex1[j - 1] = pairIndex1[j];
+				pairIndex2[j - 1] = pairIndex2[j];
+				pairEuclidean[j] = swapEuclidean;
+				pairIndex1[j] = swapIndex1;
+				pairIndex2[j] = swapIndex2;
+			}
+		}
+	}
+	// find all possible pyramids
+	vector<int32_t> frequency(numberofCluster, 0);
+	vector<vector<int32_t>> pyramid;
+	for (int32_t i = 0; i < pairMaxNumber && i < numberofPair; i++)
+	{
+		frequency[pairIndex1[i]]++;
+		frequency[pairIndex2[i]]++;
+	}
+	for (int32_t i = 0; i < numberofCluster; i++)
+	{
+		if (frequency[i] > 2) // 3 pairs (or more) with a commmon element i forms a pyramid (or more)
+		{
+			vector<int32_t> pyramidElement;
+			for (int32_t j = 0; j < pairMaxNumber && j < numberofPair; j++)
+			{
+				if (i == pairIndex1[j]) pyramidElement.push_back(pairIndex2[j]);
+				else if (i == pairIndex2[j]) pyramidElement.push_back(pairIndex1[j]);
+			}
+			//
+			for (int32_t j = 0; j < frequency[i] - 2; j++)
+			{
+				for (int32_t k = j + 1; k < frequency[i] - 1; k++)
+				{
+					for (int32_t l = k + 1; l < frequency[i]; l++)
+					{
+						vector<int32_t> entry;
+						entry.push_back(i); entry.push_back(pyramidElement[j]);
+						entry.push_back(pyramidElement[k]); entry.push_back(pyramidElement[l]);
+						for (int32_t l1 = 0; l1 < 4; l1++) // entry element in ascending order
+						{
+							for (int32_t l2 = 3; l2 > l1; l2--)
+							{
+								if (entry[l2] < entry[l2 - 1])
+								{
+									int32_t swap = entry[l2 - 1];
+									entry[l2 - 1] = entry[l2];
+									entry[l2] = swap;
+								}
+							}
+						}
+						pyramid.push_back(entry);
+					}
+				}
+			}
+		}
+	}
+	// post processing
+	vector<vector<int32_t>> pyramid_sorted;
+	for (int32_t i = 0; i < numberofCluster - 3; i++)
+	{
+		for (int32_t j = i; j < numberofCluster - 2; j++)
+		{
+			for (int32_t k = j; k < numberofCluster - 1; k++)
+			{
+				for (int32_t l = k; l < numberofCluster; l++)
+				{
+					int32_t m = 0;
+					bool foundMatch = false;
+					while (m < pyramid.size() && !foundMatch)
+					{
+						if (pyramid[m][0] == i && pyramid[m][1] == j && pyramid[m][2] == k && pyramid[m][3] == l)
+						{
+							pyramid_sorted.push_back(vector<int32_t>());
+							pyramid_sorted.back().push_back(i);
+							pyramid_sorted.back().push_back(j);
+							pyramid_sorted.back().push_back(k);
+							pyramid_sorted.back().push_back(l);
+							foundMatch = true;
+						}
+						m++;
+					}
+				}
+			}
+		}
+	}
+	steady_clock::time_point end = steady_clock::now();
+	cout << "elapsed time: " << duration_cast<milliseconds>(end - begin).count() << "ms" << endl;
+
+	// 6. catalog matching (k-vector search)
+
+
+	// 7. TRIAD
 }
 
 void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32_t clusterMaxSize, bool saveCSV, bool debugMode)
@@ -207,8 +332,6 @@ void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32
 	// 4. find centroid
 	cout << "4. get cendtroid" << endl;
 	begin = steady_clock::now();
-	vector<float> centroid_x;
-	vector<float> centroid_y;
 	for (int32_t i = 0; i < size; i++)
 	{
 		if (nonZeroClusterSize[i] > clusterMinSize && nonZeroClusterSize[i] < clusterMaxSize)
@@ -257,6 +380,7 @@ void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32
 		cout << "mean: " << mean << ", stddev: " << stddev << endl;
 		cout << "number of non-zero clusters: " << numberofCluster << endl;
 		cout << "number of stars: " << centroid_x.size() << endl;
+		cout << endl;
 	}
 
 	// return
