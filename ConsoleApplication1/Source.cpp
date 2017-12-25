@@ -3,15 +3,18 @@
 #include <chrono>
 #include "csv.h"
 #include "csv.cpp"
+#include "catalog.h"
 
 using namespace std;
 using namespace chrono;
 
+int32_t row = 0;
+int32_t column = 0;
 vector<float> centroid_x;
 vector<float> centroid_y;
 
 void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32_t clusterMaxSize, bool saveCSV, bool debugMode);
-void getAttitude(int32_t pairMaxNumber, bool saveCSV, bool debugMode);
+void getAttitude(int32_t pairMaxNumber, double fmm, double err, double slope, double yintercept, bool saveCSV, bool debugMode);
 
 int main(void)
 {
@@ -19,11 +22,12 @@ int main(void)
 	findStar("11 c 1.8 100.bmp", 5, 14, 250, false, true);
 	//findStar("test2.bmp", 1, 5, 40000, true, true);
 
-	getAttitude(15, false, false);
+	getAttitude(15, 16.27, 1.5e-5, 4.96309e-7, 0.942007877, false, false);
+
 	return 0;
 }
 
-void getAttitude(int32_t pairMaxNumber, bool saveCSV, bool debugMode)
+void getAttitude(int32_t pairMaxNumber, double fmm, double err, double slope, double yintercept, bool saveCSV, bool debugMode)
 {
 	// 5. selection
 	cout << "5. selection" << endl;
@@ -114,11 +118,11 @@ void getAttitude(int32_t pairMaxNumber, bool saveCSV, bool debugMode)
 	vector<vector<int32_t>> pyramid_sorted;
 	for (int32_t i = 0; i < numberofCluster - 3; i++)
 	{
-		for (int32_t j = i; j < numberofCluster - 2; j++)
+		for (int32_t j = i + 1; j < numberofCluster - 2; j++)
 		{
-			for (int32_t k = j; k < numberofCluster - 1; k++)
+			for (int32_t k = j + 1; k < numberofCluster - 1; k++)
 			{
-				for (int32_t l = k; l < numberofCluster; l++)
+				for (int32_t l = k + 1; l < numberofCluster; l++)
 				{
 					int32_t m = 0;
 					bool foundMatch = false;
@@ -143,9 +147,182 @@ void getAttitude(int32_t pairMaxNumber, bool saveCSV, bool debugMode)
 	cout << "elapsed time: " << duration_cast<milliseconds>(end - begin).count() << "ms" << endl;
 
 	// 6. catalog matching (k-vector search)
+	cout << "6. catalog matching" << endl;
+	begin = steady_clock::now();
+	double f = column/5.7*fmm; // focal length in pixels
+	double pairSpherical[6];
+	int32_t lowerIndex[6];
+	int32_t upperIndex[6];
+	int32_t count = 0;
+	vector<int32_t> pyramid_myID = pyramid_sorted[0];
+	// find index range
+	for (int32_t i = 0; i < 3; i++)
+	{
+		for (int32_t j = i + 1; j < 4; j++)
+		{
+			double x1 = centroid_x[pyramid_myID[i]];
+			double y1 = centroid_y[pyramid_myID[i]];
+			double x2 = centroid_x[pyramid_myID[j]];
+			double y2 = centroid_y[pyramid_myID[j]];
+			pairSpherical[count] = (x1*x2 + y1*y2 + f*f)/(sqrt(x1*x1 + y1*y1 + f*f)*sqrt(x2*x2 + y2*y2 + f*f));
+			upperIndex[count] = kvector[(int32_t)((pairSpherical[count] + err - yintercept)/slope) - 1][2]; // upper bound (excluded)
+			lowerIndex[count] = kvector[(int32_t)((pairSpherical[count] - err - yintercept)/slope) + 1][2]; // lower bound (included)
+			count++;
+		}
+	}
+	// find pyramid candidates
+	bool pairID[2647][6] = {false, };
+	int32_t pairIDcount[2647] = {0, };
+	for (int32_t i = 0; i < 6; i++)
+	{
+		for (int32_t j = lowerIndex[i]; j < upperIndex[i]; j++)
+		{
+			if (!pairID[kvector[j][0]][i])
+			{
+				pairID[kvector[j][0]][i] = true;
+				pairIDcount[kvector[j][0]]++;
+			}
+			if (!pairID[kvector[j][1]][i])
+			{
+				pairID[kvector[j][1]][i] = true;
+				pairIDcount[kvector[j][1]]++;
+			}
+		}
+	}
+	int32_t pairPattern[4][3] =
+	{
+		0, 1, 2,
+		0, 3, 4,
+		1, 3, 5,
+		2, 4, 5
+	};
+	vector<vector<int32_t>> pyramid_starID;
+	for (int32_t i = 0; i < 2647; i++)
+	{
+		int32_t cond = -1;
+		if (pairID[i][0] && pairID[i][1] && pairID[i][2] && !pairID[i][3] && !pairID[i][4] && !pairID[i][5]) cond = 0;
+		else if (pairID[i][0] && !pairID[i][1] && !pairID[i][2] && pairID[i][3] && pairID[i][4] && !pairID[i][5]) cond = 1;
+		else if (!pairID[i][0] && pairID[i][1] && !pairID[i][2] && pairID[i][3] && !pairID[i][4] && pairID[i][5]) cond = 2;
+		else if (!pairID[i][0] && !pairID[i][1] && pairID[i][2] && !pairID[i][3] && pairID[i][4] && pairID[i][5]) cond = 3;
+		if (!(cond < 0))
+		{
+			vector<int32_t> entry(4);
+			entry[cond] = i; // common ID
+			for (int32_t j = 0; j < 3; j++)
+			{
+				int32_t count = 0;
+				for (int32_t k = lowerIndex[pairPattern[cond][j]]; k < upperIndex[pairPattern[cond][j]]; k++)
+				{
+					if (kvector[k][0] == i)
+					{
+						if (cond > j) entry[j] = kvector[k][1];
+						else entry[j + 1] = kvector[k][1];
+						count++;
+					}
+					else if (kvector[k][1] == i)
+					{
+						if (cond > j) entry[j] = kvector[k][0];
+						else entry[j + 1] = kvector[k][0];
+						count++;
+					}
+				}
+				if (count > 1) cout << i << endl;
+			}
+			pyramid_starID.push_back(entry);
+		}
+	}
+	end = steady_clock::now();
 
+	for (int32_t i = 0; i < pyramid_starID.size(); i++)
+	{
+		for (int32_t j = 0; j < 4; j++) cout << pyramid_starID[i][j] << " ";
+		cout << endl;
+	}
+
+	cout << "elapsed time: " << duration_cast<milliseconds>(end - begin).count() << "ms" << endl;
 
 	// 7. TRIAD
+	cout << "7. TRIAD" << endl;
+	begin = steady_clock::now();
+	// find skyCoord & pixelCoord
+	double skyCoord1[3];
+	double skyCoord2[3];
+	double pixelCoord1[3];
+	double pixelCoord2[3];
+	for (int32_t i = 0; i < 3; i++)
+	{
+		skyCoord1[i] = mcf[pyramid_starID[0][0] - 1][i];
+		skyCoord2[i] = mcf[pyramid_starID[0][1] - 1][i];
+	}
+	double sfx1 = atan(centroid_x[pyramid_myID[0]]/f);
+	double sfy1 = atan(centroid_y[pyramid_myID[0]]/f*cos(sfx1));
+	double sfx2 = atan(centroid_x[pyramid_myID[1]] / f);
+	double sfy2 = atan(centroid_y[pyramid_myID[1]] / f*cos(sfx2));
+	pixelCoord1[0] = -sin(sfx1)*cos(sfy1); pixelCoord1[1] = cos(sfx1)*cos(sfy1); pixelCoord1[2] = -sin(sfy1);
+	pixelCoord2[0] = -sin(sfx2)*cos(sfy2); pixelCoord2[1] = cos(sfx2)*cos(sfy2); pixelCoord2[2] = -sin(sfy2);
+	// find ifn & sfn
+	double ifn[3][3];
+	double sfn[3][3];
+	for (int32_t i = 0; i < 3; i++) ifn[0][i] = skyCoord1[i];
+	ifn[1][0] = skyCoord1[1]*skyCoord2[2] - skyCoord2[1]*skyCoord1[2];
+	ifn[1][1] = skyCoord2[0]*skyCoord1[2] - skyCoord1[0]*skyCoord2[2];
+	ifn[1][2] = skyCoord1[0]*skyCoord2[1] - skyCoord2[0]*skyCoord1[1];
+	ifn[2][0] = -(skyCoord1[1]*ifn[1][2] - ifn[1][1]*skyCoord1[2]);
+	ifn[2][1] = -(ifn[1][0]*skyCoord1[2] - skyCoord1[0]*ifn[1][2]);
+	ifn[2][2] = -(skyCoord1[0]*ifn[1][1] - ifn[1][0]*skyCoord1[1]);
+	for (int32_t i = 1; i < 3; i++) // normalize
+	{
+		double norm = 0;
+		for (int32_t j = 0; j < 3; j++) norm += ifn[i][j] * ifn[i][j];
+		norm = sqrt(norm);
+		for (int32_t j = 0; j < 3; j++) ifn[i][j] /= norm;
+	}
+	for (int32_t i = 0; i < 3; i++) sfn[0][i] = pixelCoord1[i];
+	sfn[1][0] = pixelCoord1[1] * pixelCoord2[2] - pixelCoord2[1] * pixelCoord1[2];
+	sfn[1][1] = pixelCoord2[0] * pixelCoord1[2] - pixelCoord1[0] * pixelCoord2[2];
+	sfn[1][2] = pixelCoord1[0] * pixelCoord2[1] - pixelCoord2[0] * pixelCoord1[1];
+	sfn[2][0] = -(pixelCoord1[1] * sfn[1][2] - sfn[1][1] * pixelCoord1[2]);
+	sfn[2][1] = -(sfn[1][0] * pixelCoord1[2] - pixelCoord1[0] * sfn[1][2]);
+	sfn[2][2] = -(pixelCoord1[0] * sfn[1][1] - sfn[1][0] * pixelCoord1[1]);
+	for (int32_t i = 1; i < 3; i++) // normalize
+	{
+		double norm = 0;
+		for (int32_t j = 0; j < 3; j++) norm += sfn[i][j] * sfn[i][j];
+		norm = sqrt(norm);
+		for (int32_t j = 0; j < 3; j++) sfn[i][j] /= norm;
+	}
+	double rotationMatrix[3][3] = {0, };
+	for (int32_t i = 0; i < 3; i++)
+	{
+		for (int32_t j = 0; j < 3; j++)
+		{
+			for (int32_t k = 0; k < 3; k++) rotationMatrix[i][j] += sfn[i][k]*ifn[j][k];
+		}
+	}
+
+	for (int32_t i = 0; i < 3; i++)
+	{
+		for (int32_t j = 0; j < 3; j++) cout << rotationMatrix[i][j] << " ";
+		cout << endl;
+	}
+
+	double eye[3][3] = {0, };
+	for (int32_t i = 0; i < 3; i++)
+	{
+		for (int32_t j = 0; j < 3; j++)
+		{
+			for (int32_t k = 0; k < 3; k++) eye[i][j] += rotationMatrix[i][k]*rotationMatrix[j][k];
+		}
+	}
+
+	for (int32_t i = 0; i < 3; i++)
+	{
+		for (int32_t j = 0; j < 3; j++) cout << eye[i][j] << " ";
+		cout << endl;
+	}
+
+	end = steady_clock::now();
+	cout << "elapsed time: " << duration_cast<milliseconds>(end - begin).count() << "ms" << endl;
 }
 
 void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32_t clusterMaxSize, bool saveCSV, bool debugMode)
@@ -157,8 +334,8 @@ void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32
 	// read header & extract row/column size
 	uint8_t header[54];
 	fread(header, sizeof(uint8_t), 54, in);
-	int32_t row = *(int32_t*)(header + 22);
-	int32_t column = *(int32_t*)(header + 18);
+	row = *(int32_t*)(header + 22);
+	column = *(int32_t*)(header + 18);
 	// read raw image 
 	int32_t size = row*column;
 	uint8_t* bgr = new uint8_t[3*size];
