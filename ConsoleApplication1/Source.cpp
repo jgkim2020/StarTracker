@@ -1,5 +1,6 @@
 #include <iostream>
 #include <vector>
+#include <map>
 #include <chrono>
 #include "csv.h"
 #include "csv.cpp"
@@ -19,10 +20,10 @@ void getAttitude(int32_t pairMaxNumber, double fmm, double err, double slope, do
 int main(void)
 {
 	//findStar("11 vf 1.8 100.bmp", 4, 14, 250, false, true);
-	findStar("11 c 1.8 100.bmp", 5, 14, 250, false, true);
+	findStar("11 c 1.8 100.bmp", 5, 14, 250, true, true);
 	//findStar("test2.bmp", 1, 5, 40000, true, true);
 
-	getAttitude(15, 16.27, 1.5e-5, 4.96309e-7, 0.942007877, false, false);
+	getAttitude(20, 16.27, 1.5e-5, 4.96309e-7, 0.942007877, true, false);
 
 	return 0;
 }
@@ -43,7 +44,7 @@ void getAttitude(int32_t pairMaxNumber, double fmm, double err, double slope, do
 		{
 			float deltaX = centroid_x[i] - centroid_x[j];
 			float deltaY = centroid_y[i] - centroid_y[j];
-			pairEuclidean.push_back(sqrtf(deltaX*deltaX + deltaY*deltaY));
+			pairEuclidean.push_back((int32_t)sqrtf(deltaX*deltaX + deltaY*deltaY));
 			pairIndex1.push_back(i);
 			pairIndex2.push_back(j);
 		}
@@ -76,6 +77,7 @@ void getAttitude(int32_t pairMaxNumber, double fmm, double err, double slope, do
 		frequency[pairIndex1[i]]++;
 		frequency[pairIndex2[i]]++;
 	}
+
 	for (int32_t i = 0; i < numberofCluster; i++)
 	{
 		if (frequency[i] > 2) // 3 pairs (or more) with a commmon element i forms a pyramid (or more)
@@ -86,7 +88,6 @@ void getAttitude(int32_t pairMaxNumber, double fmm, double err, double slope, do
 				if (i == pairIndex1[j]) pyramidElement.push_back(pairIndex2[j]);
 				else if (i == pairIndex2[j]) pyramidElement.push_back(pairIndex1[j]);
 			}
-			//
 			for (int32_t j = 0; j < frequency[i] - 2; j++)
 			{
 				for (int32_t k = j + 1; k < frequency[i] - 1; k++)
@@ -143,18 +144,52 @@ void getAttitude(int32_t pairMaxNumber, double fmm, double err, double slope, do
 			}
 		}
 	}
+	// find the best pyramid (smallest pyramid)
+	int32_t pyramidEuclidMin = row*column;
+	int32_t pyramidEuclidMinIndex = -1;
+	for (int32_t i = 0; i < pyramid_sorted.size(); i++)
+	{
+		int32_t pyramidEuclidSum = 0;
+		for (int32_t j = 0; j < 3; j++)
+		{
+			for (int32_t k = j + 1; k < 4; k++)
+			{
+				int32_t myID1 = pyramid_sorted[i][j];
+				int32_t myID2 = pyramid_sorted[i][k];
+				float deltaX = centroid_x[myID1] - centroid_x[myID2];
+				float deltaY = centroid_y[myID1] - centroid_y[myID2];
+				pyramidEuclidSum += (int32_t)sqrtf(deltaX*deltaX + deltaY*deltaY);
+			}
+		}
+		if (pyramidEuclidSum < pyramidEuclidMin)
+		{
+			pyramidEuclidMin = pyramidEuclidSum;
+			pyramidEuclidMinIndex = i;
+		}
+		pyramid_sorted[i].push_back(pyramidEuclidSum);
+	}
 	steady_clock::time_point end = steady_clock::now();
 	cout << "elapsed time: " << duration_cast<milliseconds>(end - begin).count() << "ms" << endl;
+	if (saveCSV)
+	{
+		cout << "saving results in csv format..." << endl;
+		csv<int32_t> csvout("5pyramid_candidates_myID.csv");
+		vector<string> header;
+		for (int32_t i = 0; i < 4; i++) header.push_back("myID " + to_string(i + 1));
+		header.push_back("pyramid Euclid sum");
+		csvout.write(header, pyramid_sorted);
+		cout << "saved 5pyramid_candidates_myID.csv" << endl;
+	}
 
 	// 6. catalog matching (k-vector search)
 	cout << "6. catalog matching" << endl;
 	begin = steady_clock::now();
-	double f = column/5.7*fmm; // focal length in pixels
+	double f = column / 5.7*fmm; // focal length in pixels
 	double pairSpherical[6];
 	int32_t lowerIndex[6];
 	int32_t upperIndex[6];
 	int32_t count = 0;
-	vector<int32_t> pyramid_myID = pyramid_sorted[0];
+	vector<int32_t> pyramid_myID = pyramid_sorted[pyramidEuclidMinIndex];
 	// find index range
 	for (int32_t i = 0; i < 3; i++)
 	{
@@ -164,15 +199,15 @@ void getAttitude(int32_t pairMaxNumber, double fmm, double err, double slope, do
 			double y1 = centroid_y[pyramid_myID[i]];
 			double x2 = centroid_x[pyramid_myID[j]];
 			double y2 = centroid_y[pyramid_myID[j]];
-			pairSpherical[count] = (x1*x2 + y1*y2 + f*f)/(sqrt(x1*x1 + y1*y1 + f*f)*sqrt(x2*x2 + y2*y2 + f*f));
-			upperIndex[count] = kvector[(int32_t)((pairSpherical[count] + err - yintercept)/slope) - 1][2]; // upper bound (excluded)
-			lowerIndex[count] = kvector[(int32_t)((pairSpherical[count] - err - yintercept)/slope) + 1][2]; // lower bound (included)
+			pairSpherical[count] = (x1*x2 + y1*y2 + f*f) / (sqrt(x1*x1 + y1*y1 + f*f)*sqrt(x2*x2 + y2*y2 + f*f));
+			upperIndex[count] = kvector[(int32_t)((pairSpherical[count] + err - yintercept) / slope) - 1][2]; // upper bound (excluded)
+			lowerIndex[count] = kvector[(int32_t)((pairSpherical[count] - err - yintercept) / slope) + 1][2]; // lower bound (included)
 			count++;
 		}
 	}
 	// find pyramid candidates
-	bool pairID[2647][6] = {false, };
-	int32_t pairIDcount[2647] = {0, };
+	bool pairID[2647][6] = { false, };
+	int32_t pairIDcount[2647] = { 0, };
 	for (int32_t i = 0; i < 6; i++)
 	{
 		for (int32_t j = lowerIndex[i]; j < upperIndex[i]; j++)
@@ -208,6 +243,7 @@ void getAttitude(int32_t pairMaxNumber, double fmm, double err, double slope, do
 		{
 			vector<int32_t> entry(4);
 			entry[cond] = i; // common ID
+			bool existDuplicate = false;
 			for (int32_t j = 0; j < 3; j++)
 			{
 				int32_t count = 0;
@@ -226,20 +262,44 @@ void getAttitude(int32_t pairMaxNumber, double fmm, double err, double slope, do
 						count++;
 					}
 				}
-				if (count > 1) cout << i << endl;
+				if (count > 1) existDuplicate = true;
 			}
-			pyramid_starID.push_back(entry);
+			if (!existDuplicate) pyramid_starID.push_back(entry);
 		}
 	}
 	end = steady_clock::now();
-
-	for (int32_t i = 0; i < pyramid_starID.size(); i++)
-	{
-		for (int32_t j = 0; j < 4; j++) cout << pyramid_starID[i][j] << " ";
-		cout << endl;
-	}
-
 	cout << "elapsed time: " << duration_cast<milliseconds>(end - begin).count() << "ms" << endl;
+	if (saveCSV)
+	{
+		cout << "saving results in csv format..." << endl;
+		csv<int32_t> csvout("6pyramid_starID.csv");
+		vector<string> header;
+		for (int32_t i = 0; i < 4; i++) header.push_back("starID " + to_string(i + 1));
+		csvout.write(header, pyramid_starID);
+		cout << "saved 6pyramid_starID.csv" << endl;
+	}
+	if (saveCSV)
+	{
+		cout << "saving results in csv format..." << endl;
+		csv<string> csvout("6pair_candidates_starID.csv");
+		vector<string> header;
+		vector<vector<string>> fields;
+		header.push_back("pyramid pair"); header.push_back("spherical distance");
+		header.push_back("starID 1"); header.push_back("starID 2");
+		for (int32_t i = 0; i < 6; i++)
+		{
+			for (int32_t j = lowerIndex[i]; j < upperIndex[i]; j++)
+			{
+				fields.push_back(vector<string>());
+				fields.back().push_back(to_string(i + 1));
+				fields.back().push_back(to_string(pairSpherical[i]));
+				fields.back().push_back(to_string(kvector[j][0]));
+				fields.back().push_back(to_string(kvector[j][1]));
+			}
+		}
+		csvout.write(header, fields);
+		cout << "saved 6pair_candidates_starID.csv" << endl;
+	}
 
 	// 7. TRIAD
 	cout << "7. TRIAD" << endl;
@@ -256,8 +316,8 @@ void getAttitude(int32_t pairMaxNumber, double fmm, double err, double slope, do
 	}
 	double sfx1 = atan(centroid_x[pyramid_myID[0]]/f);
 	double sfy1 = atan(centroid_y[pyramid_myID[0]]/f*cos(sfx1));
-	double sfx2 = atan(centroid_x[pyramid_myID[1]] / f);
-	double sfy2 = atan(centroid_y[pyramid_myID[1]] / f*cos(sfx2));
+	double sfx2 = atan(centroid_x[pyramid_myID[1]]/f);
+	double sfy2 = atan(centroid_y[pyramid_myID[1]]/f*cos(sfx2));
 	pixelCoord1[0] = -sin(sfx1)*cos(sfy1); pixelCoord1[1] = cos(sfx1)*cos(sfy1); pixelCoord1[2] = -sin(sfy1);
 	pixelCoord2[0] = -sin(sfx2)*cos(sfy2); pixelCoord2[1] = cos(sfx2)*cos(sfy2); pixelCoord2[2] = -sin(sfy2);
 	// find ifn & sfn
@@ -278,12 +338,12 @@ void getAttitude(int32_t pairMaxNumber, double fmm, double err, double slope, do
 		for (int32_t j = 0; j < 3; j++) ifn[i][j] /= norm;
 	}
 	for (int32_t i = 0; i < 3; i++) sfn[0][i] = pixelCoord1[i];
-	sfn[1][0] = pixelCoord1[1] * pixelCoord2[2] - pixelCoord2[1] * pixelCoord1[2];
-	sfn[1][1] = pixelCoord2[0] * pixelCoord1[2] - pixelCoord1[0] * pixelCoord2[2];
-	sfn[1][2] = pixelCoord1[0] * pixelCoord2[1] - pixelCoord2[0] * pixelCoord1[1];
-	sfn[2][0] = -(pixelCoord1[1] * sfn[1][2] - sfn[1][1] * pixelCoord1[2]);
-	sfn[2][1] = -(sfn[1][0] * pixelCoord1[2] - pixelCoord1[0] * sfn[1][2]);
-	sfn[2][2] = -(pixelCoord1[0] * sfn[1][1] - sfn[1][0] * pixelCoord1[1]);
+	sfn[1][0] = pixelCoord1[1]*pixelCoord2[2] - pixelCoord2[1]*pixelCoord1[2];
+	sfn[1][1] = pixelCoord2[0]*pixelCoord1[2] - pixelCoord1[0]*pixelCoord2[2];
+	sfn[1][2] = pixelCoord1[0]*pixelCoord2[1] - pixelCoord2[0]*pixelCoord1[1];
+	sfn[2][0] = -(pixelCoord1[1]*sfn[1][2] - sfn[1][1]*pixelCoord1[2]);
+	sfn[2][1] = -(sfn[1][0]*pixelCoord1[2] - pixelCoord1[0]*sfn[1][2]);
+	sfn[2][2] = -(pixelCoord1[0]*sfn[1][1] - sfn[1][0]*pixelCoord1[1]);
 	for (int32_t i = 1; i < 3; i++) // normalize
 	{
 		double norm = 0;
@@ -352,7 +412,8 @@ void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32
 	cout << "elapsed time: " << duration_cast<milliseconds>(end - begin).count() << "ms" << endl;
 	if (saveCSV)
 	{
-		csv<int32_t> csvout("original_image.csv");
+		cout << "saving results in csv format..." << endl;
+		csv<int32_t> csvout("1original_image.csv");
 		vector<string> header;
 		vector<vector<int32_t>> fields;
 		for (int32_t i = 0; i < column; i++) header.push_back("C" + to_string(i + 1));
@@ -362,7 +423,7 @@ void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32
 			for (int32_t j = 0; j < column; j++) fields.back().push_back((int32_t)data[i*column + j]);
 		}
 		csvout.write(header, fields);
-		cout << "saved original_image.csv" << endl;
+		cout << "saved 1original_image.csv" << endl;
 	}
 	
 	// 2. thresholding (global)
@@ -384,7 +445,8 @@ void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32
 	cout << "elapsed time: " << duration_cast<milliseconds>(end - begin).count() << "ms" << endl;
 	if (saveCSV)
 	{
-		csv<int32_t> csvout("threshold_image.csv");
+		cout << "saving results in csv format..." << endl;
+		csv<int32_t> csvout("2threshold_image.csv");
 		vector<string> header;
 		vector<vector<int32_t>> fields;
 		for (int32_t i = 0; i < column; i++) header.push_back("C" + to_string(i + 1));
@@ -394,7 +456,7 @@ void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32
 			for (int32_t j = 0; j < column; j++) fields.back().push_back((int32_t)data[i*column + j]);
 		}
 		csvout.write(header, fields);
-		cout << "saved threshold_image.csv" << endl;
+		cout << "saved 2threshold_image.csv" << endl;
 	}
 
 	// 3. find and label connected components (crude implementation)
@@ -402,6 +464,8 @@ void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32
 	begin = steady_clock::now();
 	int32_t* nonZeroCluster = new int32_t[size];
 	int32_t* nonZeroClusterSize = new int32_t[size];
+	map<int32_t, int32_t> nonZeroCluster_dict;
+	map<int32_t, int32_t> nonZeroClusterSize_dict;
 	int32_t numberofCluster = 0;
 	int32_t connectivity8[8] = { -column - 1, -column, -column + 1, -1, 1, column - 1, column, column + 1 };
 	// initialize array
@@ -410,13 +474,14 @@ void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32
 		nonZeroCluster[i] = -1;
 		nonZeroClusterSize[i] = 0;
 	}
-	// find non-zero connected component (of size > 1) and assign a parent label
+	// find non-zero connected component (excluding single pixel clusters) and assign a parent label
 	for (int32_t i = 0; i < size; i++)
 	{
 		if (data[i] > 0) // for non-zero pixels
 		{
 			int32_t minimumNeighborID = size;
 			int32_t myID = i;
+			bool isolated = true;
 			// find minimum neighbor ID (excluding self)
 			for (int32_t j = 0; j < 8; j++)
 			{
@@ -424,35 +489,42 @@ void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32
 				if (-1 < i + connectivity8[j] && i + connectivity8[j] < size)
 				{
 					// for ID assigned non-zero pixels
-					if (data[i + connectivity8[j]] > 0 && nonZeroCluster[i + connectivity8[j]] > -1)
+					if (data[i + connectivity8[j]] > 0)
 					{
-						int32_t rootID = nonZeroCluster[i + connectivity8[j]];
-						while (rootID != nonZeroCluster[rootID]) rootID = nonZeroCluster[rootID]; // find root
-						if (minimumNeighborID > rootID) minimumNeighborID = rootID;
-					}
-				}
-			}
-			// update self
-			if (minimumNeighborID >= myID) minimumNeighborID = i;
-			nonZeroCluster[i] = minimumNeighborID;
-			nonZeroClusterSize[minimumNeighborID]++;
-			// update neighbors
-			for (int32_t j = 0; j < 8; j++) 
-			{
-				if (-1 < i + connectivity8[j] && i + connectivity8[j] < size) // for admissible indices
-				{
-					if (data[i + connectivity8[j]] > 0) // for non-zero pixels
-					{
-						if (nonZeroCluster[i + connectivity8[j]] < 0) // unassinged non-zero pixels
-						{
-							nonZeroCluster[i + connectivity8[j]] = minimumNeighborID;
-						}
-						else // ID assigned non-zero pixels
+						if (nonZeroCluster[i + connectivity8[j]] > -1)
 						{
 							int32_t rootID = nonZeroCluster[i + connectivity8[j]];
 							while (rootID != nonZeroCluster[rootID]) rootID = nonZeroCluster[rootID]; // find root
-							if (rootID > minimumNeighborID) nonZeroCluster[rootID] = minimumNeighborID; // update root
-							nonZeroCluster[i + connectivity8[j]] = rootID; // update neighbor
+							if (minimumNeighborID > rootID) minimumNeighborID = rootID;
+						}
+						isolated = false;
+					}
+				}
+			}
+			if (!isolated) // exclude single pixel clusters
+			{
+				// update self
+				if (minimumNeighborID >= myID) minimumNeighborID = i;
+				nonZeroCluster[i] = minimumNeighborID;
+				nonZeroClusterSize[minimumNeighborID]++;
+				// update neighbors
+				for (int32_t j = 0; j < 8; j++)
+				{
+					if (-1 < i + connectivity8[j] && i + connectivity8[j] < size) // for admissible indices
+					{
+						if (data[i + connectivity8[j]] > 0) // for non-zero pixels
+						{
+							if (nonZeroCluster[i + connectivity8[j]] < 0) // unassinged non-zero pixels
+							{
+								nonZeroCluster[i + connectivity8[j]] = minimumNeighborID;
+							}
+							else // ID assigned non-zero pixels
+							{
+								int32_t rootID = nonZeroCluster[i + connectivity8[j]];
+								while (rootID != nonZeroCluster[rootID]) rootID = nonZeroCluster[rootID]; // find root
+								if (rootID > minimumNeighborID) nonZeroCluster[rootID] = minimumNeighborID; // update root
+								nonZeroCluster[i + connectivity8[j]] = minimumNeighborID; // update neighbor
+							}
 						}
 					}
 				}
@@ -462,7 +534,7 @@ void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32
 	// post processing
 	for (int32_t i = 0; i < size; i++)
 	{
-		if (data[i] > 0 && nonZeroCluster[i] != i) // for non-zero, non-root pixels
+		if (nonZeroCluster[i] != -1 && nonZeroCluster[i] != i) // for non-zero, non-root, non-single pixel cluster pixels
 		{
 			int32_t rootID = nonZeroCluster[i];
 			while (rootID != nonZeroCluster[rootID]) rootID = nonZeroCluster[rootID]; // find root
@@ -479,7 +551,8 @@ void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32
 	cout << "elapsed time: " << duration_cast<milliseconds>(end - begin).count() << "ms" << endl;
 	if (saveCSV)
 	{
-		csv<int32_t> csvout("non-zero_pixel_map.csv");
+		cout << "saving results in csv format..." << endl;
+		csv<int32_t> csvout("3non-zero_pixel_map.csv");
 		vector<string> header;
 		vector<vector<int32_t>> fields;
 		for (int32_t i = 0; i < column; i++) header.push_back("C" + to_string(i + 1));
@@ -489,11 +562,12 @@ void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32
 			for (int32_t j = 0; j < column; j++) fields.back().push_back(nonZeroCluster[i*column + j]);
 		}
 		csvout.write(header, fields);
-		cout << "saved non-zero_pixel_map.csv" << endl;
+		cout << "saved 3non-zero_pixel_map.csv" << endl;
 	}
 	if (saveCSV)
 	{
-		csv<int32_t> csvout("non-zero_cluster_size.csv");
+		cout << "saving results in csv format..." << endl;
+		csv<int32_t> csvout("3non-zero_cluster_size.csv");
 		vector<string> header;
 		vector<vector<int32_t>> fields;
 		for (int32_t i = 0; i < column; i++) header.push_back("C" + to_string(i + 1));
@@ -503,12 +577,14 @@ void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32
 			for (int32_t j = 0; j < column; j++) fields.back().push_back(nonZeroClusterSize[i*column + j]);
 		}
 		csvout.write(header, fields);
-		cout << "saved non-zero_cluster_size.csv" << endl;
+		cout << "saved 3non-zero_cluster_size.csv" << endl;
 	}
 		
 	// 4. find centroid
 	cout << "4. get cendtroid" << endl;
 	begin = steady_clock::now();
+	vector<float> centroid_pixelx;
+	vector<float> centroid_pixely;
 	for (int32_t i = 0; i < size; i++)
 	{
 		if (nonZeroClusterSize[i] > clusterMinSize && nonZeroClusterSize[i] < clusterMaxSize)
@@ -527,25 +603,31 @@ void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32
 					window = j + connectivity8[7] + 1;
 				}
 			}
-			centroid_x.push_back(((float)sumx) / sum + 0.5f - 0.5f*column);
-			centroid_y.push_back(0.5f*row - ((float)sumy) / sum - 0.5f);
+			centroid_x.push_back(((float)sumx)/sum + 0.5f - 0.5f*column);
+			centroid_y.push_back(0.5f*row - ((float)sumy)/sum - 0.5f);
+			centroid_pixelx.push_back(((float)sumx)/sum);
+			centroid_pixely.push_back(((float)sumy)/sum);
 		}
 	}
 	end = steady_clock::now();
 	cout << "elapsed time: " << duration_cast<milliseconds>(end - begin).count() << "ms" << endl;
 	if (saveCSV)
 	{
-		csv<float> csvout("centroid.csv");
+		cout << "saving results in csv format..." << endl;
+		csv<float> csvout("4centroid.csv");
 		vector<string> header;
 		vector<vector<float>> fields;
-		header.push_back("X"); header.push_back("Y");
+		header.push_back("myID"); header.push_back("X"); header.push_back("Y");
+		header.push_back("X'"); header.push_back("Y'");
 		for (uint32_t i = 0; i < centroid_x.size(); i++)
 		{
 			fields.push_back(vector<float>());
+			fields.back().push_back(i);
 			fields.back().push_back(centroid_x[i]); fields.back().push_back(centroid_y[i]);
+			fields.back().push_back(centroid_pixelx[i]); fields.back().push_back(centroid_pixely[i]);
 		}
 		csvout.write(header, fields);
-		cout << "saved centroid.csv" << endl;
+		cout << "saved 4centroid.csv" << endl;
 	}
 
 	// for debugging purposes
