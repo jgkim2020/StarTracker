@@ -359,30 +359,23 @@ void getAttitude(int32_t pairMaxNumber, double fmm, double err, double slope, do
 			for (int32_t k = 0; k < 3; k++) rotationMatrix[i][j] += sfn[i][k]*ifn[j][k];
 		}
 	}
-
-	for (int32_t i = 0; i < 3; i++)
-	{
-		for (int32_t j = 0; j < 3; j++) cout << rotationMatrix[i][j] << " ";
-		cout << endl;
-	}
-
-	double eye[3][3] = {0, };
-	for (int32_t i = 0; i < 3; i++)
-	{
-		for (int32_t j = 0; j < 3; j++)
-		{
-			for (int32_t k = 0; k < 3; k++) eye[i][j] += rotationMatrix[i][k]*rotationMatrix[j][k];
-		}
-	}
-
-	for (int32_t i = 0; i < 3; i++)
-	{
-		for (int32_t j = 0; j < 3; j++) cout << eye[i][j] << " ";
-		cout << endl;
-	}
-
 	end = steady_clock::now();
 	cout << "elapsed time: " << duration_cast<milliseconds>(end - begin).count() << "ms" << endl;
+	if (saveCSV)
+	{
+		cout << "saving results in csv format..." << endl;
+		csv<double> csvout("7rotation_Matrix.csv");
+		vector<string> header;
+		vector<vector<double>> fields;
+		for (int32_t i = 0; i < 3; i++) header.push_back("C" + to_string(i + 1));
+		for (int32_t i = 0; i < 3; i++) fields.push_back(vector<double>(3));
+		for (int32_t i = 0; i < 3; i++)
+		{
+			for (int32_t j = 0; j < 3; j++) fields[i][j] = rotationMatrix[i][j];
+		}
+		csvout.write(header, fields);
+		cout << "saved 7rotation_Matrix.csv" << endl;
+	}
 }
 
 void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32_t clusterMaxSize, bool saveCSV, bool debugMode)
@@ -460,7 +453,6 @@ void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32
 	}
 
 	// 3. find and label connected components
-	cout << "3. clustering & labelling" << endl;
 	int32_t* nonZeroCluster = new int32_t[size];
 	int32_t* nonZeroClusterSize = new int32_t[size];
 	int32_t numberofCluster = 0;
@@ -470,7 +462,7 @@ void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32
 	int32_t connectivity8[8] = { -column - 1, -column, -column + 1, -1, 1, column - 1, column, column + 1 };
 	
 	// crude implementation (with arrays)
-	
+	cout << "3. clustering & labelling (with arrays)" << endl;
 	begin = steady_clock::now();
 	// initialize array
 	for (int32_t i = 0; i < size; i++)
@@ -553,6 +545,7 @@ void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32
 	}
 	end = steady_clock::now();
 	cout << "elapsed time: " << duration_cast<milliseconds>(end - begin).count() << "ms" << endl;
+	cout << "memory usage: " << 2*4*size/1000 << "Kbyte" << endl;
 	if (saveCSV)
 	{
 		cout << "saving results in csv format..." << endl;
@@ -585,7 +578,7 @@ void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32
 	}
 
 	// memory optimized implementation (with map STL)
-
+	cout << "3. clustering & labelling (with map STL)" << endl;
 	begin = steady_clock::now();
 	// find non-zero connected component (excluding single pixel clusters) and assign a parent label
 	for (int32_t i = 0; i < size; i++)
@@ -601,6 +594,7 @@ void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32
 				// for admissible indices
 				if (-1 < i + connectivity8[j] && i + connectivity8[j] < size)
 				{
+					/* (little bit slower)
 					// for ID assigned non-zero pixels
 					if (data[i + connectivity8[j]] > 0)
 					{
@@ -612,6 +606,42 @@ void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32
 						}
 						isolated = false;
 					}
+					*/
+
+					if (data[i + connectivity8[j]] > 0)
+					{
+						if (j < 4) // already registered in nonZeroCluster_dict
+						{
+							int32_t rootID = nonZeroCluster_dict[i + connectivity8[j]];
+							int32_t rootID_ = rootID + 1;
+							while (rootID != rootID_) // find root
+							{
+								rootID_ = rootID;
+								rootID = nonZeroCluster_dict[rootID];
+							}
+							if (minimumNeighborID > rootID) minimumNeighborID = rootID;
+						}
+						else if (j < 7) // may or may not be registered in nonZeroCluster_dict
+						{
+							if (nonZeroCluster_dict.find(i + connectivity8[j]) != nonZeroCluster_dict.end())
+							{
+								int32_t rootID = nonZeroCluster_dict[i + connectivity8[j]];
+								int32_t rootID_ = rootID + 1;
+								while (rootID != rootID_) // find root
+								{
+									rootID_ = rootID;
+									rootID = nonZeroCluster_dict[rootID];
+								}
+								if (minimumNeighborID > rootID) minimumNeighborID = rootID;
+							}
+						}
+						else // not registered in nonZeroCluster_dict
+						{
+							// do nothing
+						}
+						isolated = false;
+					}
+
 				}
 			}
 			if (!isolated) // exclude single pixel clusters
@@ -627,6 +657,7 @@ void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32
 					{
 						if (data[i + connectivity8[j]] > 0) // for non-zero pixels
 						{
+							/* (little bit slower)
 							if (nonZeroCluster_dict.count(i + connectivity8[j]) == 0) // unassinged non-zero pixels
 							{
 								nonZeroCluster_dict[i + connectivity8[j]] = minimumNeighborID;
@@ -634,10 +665,53 @@ void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32
 							else // ID assigned non-zero pixels
 							{
 								int32_t rootID = nonZeroCluster_dict[i + connectivity8[j]];
-								while (rootID != nonZeroCluster_dict[rootID]) rootID = nonZeroCluster_dict[rootID]; // find root
+								int32_t rootID_ = rootID + 1;
+								while (rootID != rootID_) // find root
+								{
+									rootID_ = rootID;
+									rootID = nonZeroCluster_dict[rootID];
+								}
 								if (rootID > minimumNeighborID) nonZeroCluster_dict[rootID] = minimumNeighborID; // update root
 								nonZeroCluster_dict[i + connectivity8[j]] = minimumNeighborID; // update neighbor
 							}
+							*/
+
+							if (j < 4) // already registered in nonZeroCluster_dict
+							{
+								int32_t rootID = nonZeroCluster_dict[i + connectivity8[j]];
+								int32_t rootID_ = rootID + 1;
+								while (rootID != rootID_) // find root
+								{
+									rootID_ = rootID;
+									rootID = nonZeroCluster_dict[rootID];
+								}
+								if (rootID > minimumNeighborID) nonZeroCluster_dict[rootID] = minimumNeighborID; // update root
+								nonZeroCluster_dict[i + connectivity8[j]] = minimumNeighborID; // update neighbor
+							}
+							else if (j < 7) // may or may not be registered in nonZeroCluster_dict
+							{
+								if (nonZeroCluster_dict.find(i + connectivity8[j]) == nonZeroCluster_dict.end()) // unassinged non-zero pixels
+								{
+									nonZeroCluster_dict[i + connectivity8[j]] = minimumNeighborID;
+								}
+								else // ID assigned non-zero pixels
+								{
+									int32_t rootID = nonZeroCluster_dict[i + connectivity8[j]];
+									int32_t rootID_ = rootID + 1;
+									while (rootID != rootID_) // find root
+									{
+										rootID_ = rootID;
+										rootID = nonZeroCluster_dict[rootID];
+									}
+									if (rootID > minimumNeighborID) nonZeroCluster_dict[rootID] = minimumNeighborID; // update root
+									nonZeroCluster_dict[i + connectivity8[j]] = minimumNeighborID; // update neighbor
+								}
+							}
+							else // not registered in nonZeroCluster_dict
+							{
+								nonZeroCluster_dict[i + connectivity8[j]] = minimumNeighborID;
+							}
+
 						}
 					}
 				}
@@ -652,16 +726,17 @@ void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32
 			int32_t rootID = it->second;
 			while (rootID != nonZeroCluster_dict[rootID]) rootID = nonZeroCluster_dict[rootID]; // find root
 			it->second = rootID; // update cluster ID
-			if (nonZeroClusterSize_dict.count(it->first) != 0)
+			if (nonZeroClusterSize_dict.find(it->first) != nonZeroClusterSize_dict.end())
 			{
 				nonZeroClusterSize_dict[it->second] += nonZeroClusterSize_dict[it->first]; // update cluster size
-				nonZeroClusterSize_dict[it->first] = 0;
+				nonZeroClusterSize_dict.erase(it->first);
 			}
 		}
 		else numberofCluster_dict++; // for root cluster pixels
 	}
 	end = steady_clock::now();
 	cout << "elapsed time: " << duration_cast<milliseconds>(end - begin).count() << "ms" << endl;
+	cout << "memory usage: " << (nonZeroCluster_dict.size() + nonZeroClusterSize_dict.size())*8/1000 << "Kbyte" << endl;
 	if (saveCSV)
 	{
 		cout << "saving results in csv format..." << endl;
@@ -732,17 +807,16 @@ void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32
 			int32_t sumx = 0;
 			int32_t sumy = 0;
 			int32_t sum = 0;
-			for (int32_t j = it->first; j < window && j < size; j++)
+			int32_t count = 0;
+			for (auto it2 = nonZeroCluster_dict.find(it->first); it2 != nonZeroCluster_dict.end() && count < it->second; it2++)
 			{
-				if (nonZeroCluster_dict.count(j))
+				if (it2->second == it->first)
 				{
-					if (nonZeroCluster_dict[j] == it->first)
-					{
-						sumx += (j%column)*data[j];
-						sumy += (j/column)*data[j];
-						sum += data[j];
-						window = j + connectivity8[7] + 1;
-					}
+					int32_t index = it2->first;
+					sumx += (index%column)*data[index];
+					sumy += (index/column)*data[index];
+					sum += data[index];
+					count++;
 				}
 			}
 			centroid_x.push_back(((float)sumx)/sum + 0.5f - 0.5f*column);
