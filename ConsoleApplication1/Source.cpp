@@ -9,30 +9,41 @@
 using namespace std;
 using namespace chrono;
 
+const float PI_f = 4*atanf(1.0f);
+const double PI_d = 4*atan(1.0);
+
 int32_t row = 0;
 int32_t column = 0;
 vector<float> centroid_x;
 vector<float> centroid_y;
 
 void findStar(const char* filename, int32_t sigma, int32_t clusterMinSize, int32_t clusterMaxSize, bool saveCSV, bool debugMode);
-void getAttitude(int32_t pairMaxNumber, double fmm, double err, double slope, double yintercept, bool saveCSV, bool debugMode);
+void getAttitude(int32_t pairMaxNumber, float minimumSeparation, double fmm, double err, double slope, double yintercept, bool saveCSV, bool debugMode);
 
 int main(void)
 {
-	//findStar("11 vf 1.8 100.bmp", 4, 14, 250, false, true);
-	findStar("11 c 1.8 100.bmp", 5, 14, 250, false, true);
+	findStar("sim24bit.bmp", 5, 14, 400, false, true);
+	//findStar("11,vft,1.8,100.bmp", 5, 14, 250, false, true);
+	//findStar("11 c 1.8 100.bmp", 5, 14, 250, false, true);
 	//findStar("test.bmp", 1, 5, 40000, true, true);
 
-	getAttitude(20, 16.27, 1.5e-5, 4.96309e-7, 0.942007877, true, false);
+	getAttitude(15, 0.16f, 16.0, 9e-6, 4.96309e-7, 0.942007877, true, true);
+	// for c~ use 16.40
+	// for v~ use 16.27
+	// err 4~9e-6 (7 is average)
+	// sim (fmm 16, err 7e-6, clusterSize 14~400)
 
 	return 0;
 }
 
-void getAttitude(int32_t pairMaxNumber, double fmm, double err, double slope, double yintercept, bool saveCSV, bool debugMode)
+void getAttitude(int32_t pairMaxNumber, float minimumSeparation, double fmm, double err, double slope, double yintercept, bool saveCSV, bool debugMode)
 {
 	// 5. selection
 	cout << "5. selection" << endl;
 	steady_clock::time_point begin = steady_clock::now();
+	vector<int32_t> pairEuclidean_;
+	vector<int32_t> pairIndex1_;
+	vector<int32_t> pairIndex2_;
 	vector<int32_t> pairEuclidean;
 	vector<int32_t> pairIndex1;
 	vector<int32_t> pairIndex2;
@@ -44,40 +55,53 @@ void getAttitude(int32_t pairMaxNumber, double fmm, double err, double slope, do
 		{
 			float deltaX = centroid_x[i] - centroid_x[j];
 			float deltaY = centroid_y[i] - centroid_y[j];
-			pairEuclidean.push_back((int32_t)sqrtf(deltaX*deltaX + deltaY*deltaY));
-			pairIndex1.push_back(i);
-			pairIndex2.push_back(j);
+			pairEuclidean_.push_back((int32_t)(deltaX*deltaX + deltaY*deltaY));
+			pairIndex1_.push_back(i);
+			pairIndex2_.push_back(j);
 		}
 	}
 	// sort in ascending order (bubble sort)
-	int32_t numberofPair = pairEuclidean.size();
+	int32_t numberofPair = pairEuclidean_.size();
 	for (int32_t i = 0; i < pairMaxNumber && i < numberofPair; i++)
 	{
 		for (int32_t j = numberofPair - 1; j > i; j--)
 		{
-			if (pairEuclidean[j] < pairEuclidean[j - 1])
+			if (pairEuclidean_[j] < pairEuclidean_[j - 1])
 			{
-				int32_t swapEuclidean = pairEuclidean[j - 1];
-				int32_t swapIndex1 = pairIndex1[j - 1];
-				int32_t swapIndex2 = pairIndex2[j - 1];
-				pairEuclidean[j - 1] = pairEuclidean[j];
-				pairIndex1[j - 1] = pairIndex1[j];
-				pairIndex2[j - 1] = pairIndex2[j];
-				pairEuclidean[j] = swapEuclidean;
-				pairIndex1[j] = swapIndex1;
-				pairIndex2[j] = swapIndex2;
+				int32_t swapEuclidean = pairEuclidean_[j - 1];
+				int32_t swapIndex1 = pairIndex1_[j - 1];
+				int32_t swapIndex2 = pairIndex2_[j - 1];
+				pairEuclidean_[j - 1] = pairEuclidean_[j];
+				pairIndex1_[j - 1] = pairIndex1_[j];
+				pairIndex2_[j - 1] = pairIndex2_[j];
+				pairEuclidean_[j] = swapEuclidean;
+				pairIndex1_[j] = swapIndex1;
+				pairIndex2_[j] = swapIndex2;
 			}
 		}
+		float x1 = centroid_x[pairIndex1_[i]];
+		float y1 = centroid_y[pairIndex1_[i]];
+		float x2 = centroid_x[pairIndex2_[i]];
+		float y2 = centroid_y[pairIndex2_[i]];
+		float f = column/5.7*fmm;
+		float angularSeparation = 180.0f/PI_f*acosf((x1*x2 + y1*y2 + f*f)/(sqrt(x1*x1 + y1*y1 + f*f)*sqrt(x2*x2 + y2*y2 + f*f)));
+		if (angularSeparation > minimumSeparation)
+		{
+			pairIndex1.push_back(pairIndex1_[i]);
+			pairIndex2.push_back(pairIndex2_[i]);
+			pairEuclidean.push_back((int32_t)sqrt(pairEuclidean_[i]));
+		}
+		else pairMaxNumber++;
 	}
 	// find all possible pyramids
 	vector<int32_t> frequency(numberofCluster, 0);
 	vector<vector<int32_t>> pyramid;
+	pairMaxNumber = pairIndex1.size();
 	for (int32_t i = 0; i < pairMaxNumber && i < numberofPair; i++)
 	{
 		frequency[pairIndex1[i]]++;
 		frequency[pairIndex2[i]]++;
 	}
-
 	for (int32_t i = 0; i < numberofCluster; i++)
 	{
 		if (frequency[i] > 2) // 3 pairs (or more) with a commmon element i forms a pyramid (or more)
@@ -173,6 +197,24 @@ void getAttitude(int32_t pairMaxNumber, double fmm, double err, double slope, do
 	if (saveCSV)
 	{
 		cout << "saving results in csv format..." << endl;
+		csv<int32_t> csvout("5pairs_ascending.csv");
+		vector<string> header;
+		vector<vector<int32_t>> fields;
+		for (int32_t i = 0; i < 2; i++) header.push_back("myID " + to_string(i + 1));
+		header.push_back("Euclidean distance");
+		for (int32_t i = 0; i < pairIndex1.size(); i++)
+		{
+			fields.push_back(vector<int32_t>());
+			fields.back().push_back(pairIndex1[i]);
+			fields.back().push_back(pairIndex2[i]);
+			fields.back().push_back(pairEuclidean[i]);
+		}
+		csvout.write(header, fields);
+		cout << "saved 5pyramid_candidates_myID.csv" << endl;
+	}
+	if (saveCSV)
+	{
+		cout << "saving results in csv format..." << endl;
 		csv<int32_t> csvout("5pyramid_candidates_myID.csv");
 		vector<string> header;
 		for (int32_t i = 0; i < 4; i++) header.push_back("myID " + to_string(i + 1));
@@ -184,7 +226,7 @@ void getAttitude(int32_t pairMaxNumber, double fmm, double err, double slope, do
 	// 6. catalog matching (k-vector search)
 	cout << "6. catalog matching" << endl;
 	begin = steady_clock::now();
-	double f = column / 5.7*fmm; // focal length in pixels
+	double f = column/5.7*fmm; // focal length in pixels
 	double pairSpherical[6];
 	int32_t lowerIndex[6];
 	int32_t upperIndex[6];
@@ -199,7 +241,7 @@ void getAttitude(int32_t pairMaxNumber, double fmm, double err, double slope, do
 			double y1 = centroid_y[pyramid_myID[i]];
 			double x2 = centroid_x[pyramid_myID[j]];
 			double y2 = centroid_y[pyramid_myID[j]];
-			pairSpherical[count] = (x1*x2 + y1*y2 + f*f) / (sqrt(x1*x1 + y1*y1 + f*f)*sqrt(x2*x2 + y2*y2 + f*f));
+			pairSpherical[count] = (x1*x2 + y1*y2 + f*f)/(sqrt(x1*x1 + y1*y1 + f*f)*sqrt(x2*x2 + y2*y2 + f*f));
 			upperIndex[count] = kvector[(int32_t)((pairSpherical[count] + err - yintercept) / slope) - 1][2]; // upper bound (excluded)
 			lowerIndex[count] = kvector[(int32_t)((pairSpherical[count] - err - yintercept) / slope) + 1][2]; // lower bound (included)
 			count++;
@@ -307,49 +349,64 @@ void getAttitude(int32_t pairMaxNumber, double fmm, double err, double slope, do
 	// find skyCoord & pixelCoord
 	double skyCoord1[3];
 	double skyCoord2[3];
-	double pixelCoord1[3];
-	double pixelCoord2[3];
-	for (int32_t i = 0; i < 3; i++)
+	for (int32_t i = 0; i < 3; i++) 
 	{
 		skyCoord1[i] = mcf[pyramid_starID[0][0] - 1][i];
 		skyCoord2[i] = mcf[pyramid_starID[0][1] - 1][i];
 	}
+	/*double pixelCoord1[3];
+	double pixelCoord2[3];
 	double sfx1 = atan(centroid_x[pyramid_myID[0]]/f);
 	double sfy1 = atan(centroid_y[pyramid_myID[0]]/f*cos(sfx1));
 	double sfx2 = atan(centroid_x[pyramid_myID[1]]/f);
 	double sfy2 = atan(centroid_y[pyramid_myID[1]]/f*cos(sfx2));
 	pixelCoord1[0] = -sin(sfx1)*cos(sfy1); pixelCoord1[1] = cos(sfx1)*cos(sfy1); pixelCoord1[2] = -sin(sfy1);
-	pixelCoord2[0] = -sin(sfx2)*cos(sfy2); pixelCoord2[1] = cos(sfx2)*cos(sfy2); pixelCoord2[2] = -sin(sfy2);
+	pixelCoord2[0] = -sin(sfx2)*cos(sfy2); pixelCoord2[1] = cos(sfx2)*cos(sfy2); pixelCoord2[2] = -sin(sfy2);*/
+	double pixelCoord1[3] = {-centroid_x[pyramid_myID[0]], -centroid_y[pyramid_myID[0]], f};
+	double pixelCoord2[3] = {-centroid_x[pyramid_myID[1]], -centroid_y[pyramid_myID[1]], f};
+	// normalize
+	{
+		double norm = 0.0;
+		for (int32_t i = 0; i < 3; i++) norm += pixelCoord1[i]*pixelCoord1[i];
+		norm = sqrt(norm);
+		for (int32_t i = 0; i < 3; i++) pixelCoord1[i] /= norm;
+	}
+	{
+		double norm = 0.0;
+		for (int32_t i = 0; i < 3; i++) norm += pixelCoord2[i]*pixelCoord2[i];
+		norm = sqrt(norm);
+		for (int32_t i = 0; i < 3; i++) pixelCoord2[i] /= norm;
+	}
 	// find ifn & sfn
 	double ifn[3][3];
 	double sfn[3][3];
-	for (int32_t i = 0; i < 3; i++) ifn[0][i] = skyCoord1[i];
-	ifn[1][0] = skyCoord1[1]*skyCoord2[2] - skyCoord2[1]*skyCoord1[2];
+	for (int32_t i = 0; i < 3; i++) ifn[i][0] = skyCoord1[i];
+	ifn[0][1] = skyCoord1[1]*skyCoord2[2] - skyCoord2[1]*skyCoord1[2];
 	ifn[1][1] = skyCoord2[0]*skyCoord1[2] - skyCoord1[0]*skyCoord2[2];
-	ifn[1][2] = skyCoord1[0]*skyCoord2[1] - skyCoord2[0]*skyCoord1[1];
-	ifn[2][0] = -(skyCoord1[1]*ifn[1][2] - ifn[1][1]*skyCoord1[2]);
-	ifn[2][1] = -(ifn[1][0]*skyCoord1[2] - skyCoord1[0]*ifn[1][2]);
-	ifn[2][2] = -(skyCoord1[0]*ifn[1][1] - ifn[1][0]*skyCoord1[1]);
+	ifn[2][1] = skyCoord1[0]*skyCoord2[1] - skyCoord2[0]*skyCoord1[1];
+	ifn[0][2] = ifn[1][0]*ifn[2][1] - ifn[1][1]*ifn[2][0];
+	ifn[1][2] = ifn[0][1]*ifn[2][0] - ifn[0][0]*ifn[2][1];
+	ifn[2][2] = ifn[0][0]*ifn[1][1] - ifn[0][1]*ifn[1][0];
 	for (int32_t i = 1; i < 3; i++) // normalize
 	{
 		double norm = 0;
-		for (int32_t j = 0; j < 3; j++) norm += ifn[i][j] * ifn[i][j];
+		for (int32_t j = 0; j < 3; j++) norm += ifn[j][i]*ifn[j][i];
 		norm = sqrt(norm);
-		for (int32_t j = 0; j < 3; j++) ifn[i][j] /= norm;
+		for (int32_t j = 0; j < 3; j++) ifn[j][i] /= norm;
 	}
-	for (int32_t i = 0; i < 3; i++) sfn[0][i] = pixelCoord1[i];
-	sfn[1][0] = pixelCoord1[1]*pixelCoord2[2] - pixelCoord2[1]*pixelCoord1[2];
+	for (int32_t i = 0; i < 3; i++) sfn[i][0] = pixelCoord1[i];
+	sfn[0][1] = pixelCoord1[1]*pixelCoord2[2] - pixelCoord2[1]*pixelCoord1[2];
 	sfn[1][1] = pixelCoord2[0]*pixelCoord1[2] - pixelCoord1[0]*pixelCoord2[2];
-	sfn[1][2] = pixelCoord1[0]*pixelCoord2[1] - pixelCoord2[0]*pixelCoord1[1];
-	sfn[2][0] = -(pixelCoord1[1]*sfn[1][2] - sfn[1][1]*pixelCoord1[2]);
-	sfn[2][1] = -(sfn[1][0]*pixelCoord1[2] - pixelCoord1[0]*sfn[1][2]);
-	sfn[2][2] = -(pixelCoord1[0]*sfn[1][1] - sfn[1][0]*pixelCoord1[1]);
+	sfn[2][1] = pixelCoord1[0]*pixelCoord2[1] - pixelCoord2[0]*pixelCoord1[1];
+	sfn[0][2] = sfn[1][0]*sfn[2][1] - sfn[1][1]*sfn[2][0];
+	sfn[1][2] = sfn[0][1]*sfn[2][0] - sfn[0][0]*sfn[2][1];
+	sfn[2][2] = sfn[0][0]*sfn[1][1] - sfn[0][1]*sfn[1][0];
 	for (int32_t i = 1; i < 3; i++) // normalize
 	{
 		double norm = 0;
-		for (int32_t j = 0; j < 3; j++) norm += sfn[i][j] * sfn[i][j];
+		for (int32_t j = 0; j < 3; j++) norm += sfn[j][i]*sfn[j][i];
 		norm = sqrt(norm);
-		for (int32_t j = 0; j < 3; j++) sfn[i][j] /= norm;
+		for (int32_t j = 0; j < 3; j++) sfn[j][i] /= norm;
 	}
 	double rotationMatrix[3][3] = {0, };
 	for (int32_t i = 0; i < 3; i++)
@@ -375,6 +432,33 @@ void getAttitude(int32_t pairMaxNumber, double fmm, double err, double slope, do
 		}
 		csvout.write(header, fields);
 		cout << "saved 7rotation_Matrix.csv" << endl;
+	}
+
+	// for debugging purposes
+	if (debugMode)
+	{
+		cout << endl;
+		cout << pyramid_starID.size() << " possible pyramid match from catalog found" << endl;
+		cout << "focal length in pixels: " << f << endl;
+		cout << "skyCoord1" << endl;
+		for (int32_t i = 0; i < 3; i++) cout << skyCoord1[i] << " ";
+		cout << endl;
+		cout << "skyCoord2" << endl;
+		for (int32_t i = 0; i < 3; i++) cout << skyCoord2[i] << " ";
+		cout << endl;
+		cout << "pixelCoord1" << endl;
+		for (int32_t i = 0; i < 3; i++) cout << pixelCoord1[i] << " ";
+		cout << endl;
+		cout << "pixelCoord2" << endl;
+		for (int32_t i = 0; i < 3; i++) cout << pixelCoord2[i] << " ";
+		cout << endl;
+		cout << "rotMat" << endl;
+		for (int32_t i = 0; i < 3; i++)
+		{
+			for (int32_t j = 0; j < 3; j++) cout << rotationMatrix[i][j] << " ";
+			cout << endl;
+		}
+		cout << endl;
 	}
 }
 
